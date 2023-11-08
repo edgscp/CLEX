@@ -1,21 +1,30 @@
-import pathlib
-import os
 
-from transformers import Trainer, is_torch_tpu_available
+import sys
+
+
+import copy
+from dataclasses import dataclass, field, asdict
+import pathlib
+
+import torch
+import transformers
+from transformers import Trainer, is_torch_tpu_available, AutoModelForCausalLM
 from transformers.trainer_pt_utils import LabelSmoother
 from argument import *
 
+
 import logging
-
-from configuration_clex import CLEXLlamaConfig
-from modeling_llama import LlamaForCausalLM
-from dataset import WikiDataset
-
+import wandb
 logger = logging.getLogger(__name__)
 
 
+
+
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
+import os
 os.environ["WANDB_MODE"] = "disabled"
+
+
 
 local_rank = None
 
@@ -42,6 +51,7 @@ def build_clex_args(config, model_args):
         "param_factor": model_args.param_factor,
         "factor": 1
     }
+    
 
 
 def train():
@@ -53,6 +63,11 @@ def train():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     local_rank = training_args.local_rank
 
+
+
+    from CLEX import LlamaForCausalLM, CLEXLlamaConfig
+
+
     config = CLEXLlamaConfig.from_pretrained(
         model_args.model_name_or_path
     )
@@ -61,7 +76,6 @@ def train():
     model = LlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
-        ignore_mismatched_sizes=True,
         config=config,
     )
 
@@ -75,8 +89,8 @@ def train():
     )
     tokenizer.pad_token = tokenizer.unk_token
 
+    from dataset import WikiDataset
     dataset = WikiDataset(tokenizer=tokenizer, model_args=model_args, data_args=data_args, training_args=training_args)
-
     def preprocess_logits_for_metrics(logits, labels):
         if isinstance(logits, tuple):
             # Depending on the model and config, logits may contain extra tensors,
@@ -84,9 +98,10 @@ def train():
             logits = logits[0]
         return logits.argmax(dim=-1)
 
+
     trainer = Trainer(
-        model=model,
-        tokenizer=tokenizer,
+        model=model, 
+        tokenizer=tokenizer, 
         args=training_args,
         train_dataset=dataset.train_dataset if training_args.do_train else None,
         eval_dataset=dataset.eval_dataset if training_args.do_eval else None,
