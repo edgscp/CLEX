@@ -1,22 +1,14 @@
-import torch
-from torch.utils import data
-# from torch.utils.data import Dataset
-# from datasets.arrow_dataset import Dataset as HFDataset
-from datasets.load import load_dataset, load_metric, load_from_disk
 from transformers import (
     AutoTokenizer,
     DataCollatorWithPadding,
-    EvalPrediction,
     default_data_collator,
 )
-from datasets import DatasetDict, Dataset, load_from_disk
+from datasets import Dataset, load_from_disk
 import pandas as pd
-import numpy as np
 import logging
 import transformers
 from itertools import chain
 import evaluate
-
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +16,10 @@ logger = logging.getLogger(__name__)
 class WikiDataset():
     def __init__(self, tokenizer: AutoTokenizer, model_args, data_args, training_args) -> None:
         super().__init__()
-        
+
         self.tokenizer = tokenizer
         self.data_args = data_args
         self.training_args = training_args
-
 
         if training_args.model_max_length > tokenizer.model_max_length:
             logger.warning(
@@ -39,16 +30,17 @@ class WikiDataset():
         import os
 
         path = data_args.data_path
-        if os.path.isdir(path):
+        if not os.path.isdir(path):
             lm_datasets = load_from_disk(path)
         else:
-            raw_datasets = self.load_data(data_args, training_args.cache_dir)
+            raw_datasets = self.load_data(path, training_args.cache_dir)
+            print(f"RAW DATASETS: {raw_datasets}")
             if training_args.do_train:
-                column_names = raw_datasets["train"].column_names
-                
+                column_names = raw_datasets.column_names
+                print(f"COLUMN NAMES: {column_names}")
             else:
                 column_names = raw_datasets["test"].column_names
-            self.text_column_name = "text" if "text" in column_names else column_names[0]
+            self.text_column_name = "question" if "question" in column_names else column_names[0]
             with training_args.main_process_first(desc="dataset map tokenization"):
                 tokenized_datasets = raw_datasets.map(
                     self.tokenize_function,
@@ -57,7 +49,7 @@ class WikiDataset():
                     num_proc=80,
                     remove_columns=column_names,
                 )
-            tokenized_datasets.save_to_disk(path+"-tokenized")
+            tokenized_datasets.save_to_disk(path + "-tokenized")
 
             with training_args.main_process_first(desc="grouping texts together"):
                 lm_datasets = tokenized_datasets.map(
@@ -68,25 +60,21 @@ class WikiDataset():
                 )
             lm_datasets.save_to_disk(path)
 
-        
         if training_args.do_train:
-            if "train" not in lm_datasets:
+            if "response" not in lm_datasets:
                 raise ValueError("--do_train requires a train dataset")
-            self.train_dataset = lm_datasets['train']
-
+            self.train_dataset = lm_datasets['response']
 
         if training_args.do_predict:
-            self.predict_dataset = lm_datasets['test'].train_test_split(test_size=0.1)['test']
-
+            self.predict_dataset = lm_datasets['response'].train_test_split(test_size=0.1)['response']
 
         if training_args.do_eval:
             # if "validation" not in tokenized_datasets:
             #     raise ValueError("--do_eval requires a validation dataset")
             self.eval_dataset = self.predict_dataset
-        
+
         # self.metric = evaluate.load(r"accuracy.py")
         self.metric = evaluate.load("accuracy")
-        
 
         self.data_collator = default_data_collator
         if training_args.fp16:
@@ -95,22 +83,16 @@ class WikiDataset():
     def load_data(self, data_args, cache_dir):
 
         import os
-        import json
-        json_data = []
-        json_files = [f for f in os.listdir(folder_path) if f.endswith('.json')]
+        csv_data = None
+        json_files = [f for f in os.listdir(data_args) if f.endswith('.csv')]
         for file_path in json_files:
-            with open(os.path.join(folder_path, file_path), 'r') as f:
-                file_data = json.load(f)
-                json_data.extend(file_data)
-
-        dataset = Dataset.from_pandas(pd.DataFrame(data=json_data))
-
-        raw_datasets = dataset.train_test_split(test_size=0.01)
-
+            with open(os.path.join(data_args, file_path), 'r') as f:
+                csv_data = pd.read_csv(f)
+        print(csv_data)
+        raw_datasets = Dataset.from_pandas(pd.DataFrame(data=csv_data))
+        # raw_datasets = raw_datasets.train_test_split(test_size=0.01)
         return raw_datasets
 
-
-     
     def tokenize_function(self, examples):
         tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
         from transformers.testing_utils import CaptureLogger
@@ -124,15 +106,12 @@ class WikiDataset():
             )
         return output
 
-    
     def preprocess_logits_for_metrics(self, logits, labels):
         if isinstance(logits, tuple):
             # Depending on the model and config, logits may contain extra tensors,
             # like past_key_values, but logits always come first
             logits = logits[0]
         return logits.argmax(dim=-1)
-    
-
 
     def compute_metrics(self, eval_preds):
         preds, labels = eval_preds
@@ -141,7 +120,6 @@ class WikiDataset():
         labels = labels[:, 1:].reshape(-1)
         preds = preds[:, :-1].reshape(-1)
         return self.metric.compute(predictions=preds, references=labels)
-
 
     def group_texts(self, examples):
         # Concatenate all texts.
@@ -153,11 +131,9 @@ class WikiDataset():
             total_length = (total_length // self.training_args.model_max_length) * self.training_args.model_max_length
         # Split by chunks of max_len.
         result = {
-            k: [t[i : i + self.training_args.model_max_length] for i in range(0, total_length, self.training_args.model_max_length)]
+            k: [t[i: i + self.training_args.model_max_length] for i in
+                range(0, total_length, self.training_args.model_max_length)]
             for k, t in concatenated_examples.items()
         }
         result["labels"] = result["input_ids"].copy()
         return result
-
-
-    
