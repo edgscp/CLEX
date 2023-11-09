@@ -47,10 +47,10 @@ class WikiDataset():
                     batched=True,
                     batch_size=300,
                     num_proc=80,
-                    remove_columns=column_names,
+                    remove_columns=["id", "system_prompt"],
                 )
             tokenized_datasets.save_to_disk(path + "-tokenized")
-
+            print(f"TOKENIZED DATASETS: {tokenized_datasets}")
             with training_args.main_process_first(desc="grouping texts together"):
                 lm_datasets = tokenized_datasets.map(
                     self.group_texts,
@@ -61,12 +61,12 @@ class WikiDataset():
             lm_datasets.save_to_disk(path)
 
         if training_args.do_train:
-            if "response" not in lm_datasets:
+            if not lm_datasets['response']:
                 raise ValueError("--do_train requires a train dataset")
             self.train_dataset = lm_datasets['response']
 
         if training_args.do_predict:
-            self.predict_dataset = lm_datasets['response'].train_test_split(test_size=0.1)['response']
+            self.predict_dataset = self.train_dataset.train_test_split(test_size=0.1)['response']
 
         if training_args.do_eval:
             # if "validation" not in tokenized_datasets:

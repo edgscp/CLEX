@@ -1,8 +1,8 @@
-torchrun --nproc_per_node=8 \
+torchrun --nproc_per_node=1 \
 --master_port=2349 \
 train/train_lm.py \
-    --model_name_or_path /path/to/llama2  \
-    --data_path /path/to/lm_data.json \
+    --model_name_or_path ./model/Mistral \
+    --data_path ./datas \
     --bf16 True \
     --output_dir new_ckpts/llama2/tmp \
     --num_train_epochs 1 \
@@ -19,7 +19,7 @@ train/train_lm.py \
     --lr_scheduler_type "cosine" \
     --logging_steps 1 \
     --tf32 True \
-    --model_max_length 4096 \
+    --model_max_length 15000 \
     --gradient_checkpointing True \
     --ddp_find_unused_parameters True \
     --fsdp "full_shard auto_wrap" \
